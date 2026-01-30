@@ -17,6 +17,9 @@ A lightweight Python CLI tool to copy MySQL databases using SSH tunneling and sy
 - ✅ Unique SQL dump files with timestamps
 - ✅ Detailed logging and error reporting
 - ✅ Config file or command-line support
+- ✅ **Data-only copy mode** - Skip schema, copy only data
+- ✅ **Safe mode with schema reconciliation** - Auto-handle column differences
+- ✅ **Intelligent column matching** - Complete INSERT statements with explicit column names
 
 ## System Requirements
 
@@ -183,7 +186,113 @@ python3 db_copy.py --config config.json --verbose
 python3 db_copy.py --sample-config
 ```
 
+## Data-Only Copy Mode
+
+Copy only data without schema. Useful when target database already has the schema defined.
+
+### Basic Data-Only Mode
+
+```bash
+python3 db_copy.py --config config.json --data-only
+```
+
+**Requirements:**
+- Target database and tables must already exist
+- Source and target schemas should match (or have compatible column names)
+
+**How it works:**
+- Uses `mysqldump --no-create-info` to skip CREATE TABLE statements
+- Uses `mysqldump --complete-insert` to include column names in INSERT statements
+- Allows partial schema matching - extra columns in target get NULL values
+
+### Safe Mode - Schema Reconciliation
+
+For scenarios where source and target have different schemas:
+
+```bash
+python3 db_copy.py --config config.json --data-only-safe
+```
+
+**Features:**
+- ✅ Automatically detects column differences
+- ✅ Adds missing columns to target as TEXT NULL
+- ✅ Imports data using complete INSERT statements
+- ✅ Removes temporary columns after successful import
+- ✅ Handles extra columns gracefully (NULL values)
+
+**What happens in safe mode:**
+
+1. Dump data from source (with explicit column names)
+2. Parse dump file to extract table and column information
+3. Query target database for existing columns
+4. Add any missing columns as `TEXT NULL`
+5. Import data into target
+6. Remove temporary columns (can be kept with `--keep-temp-cols`)
+
+**Example with schema differences:**
+
+Source table `users`:
+```sql
+id, name, email, phone, created_at, updated_at
+```
+
+Target table `users`:
+```sql
+id, name, email, department, status
+```
+
+Safe mode will:
+- Add `phone`, `created_at`, `updated_at` to target as TEXT NULL
+- Skip `department` and `status` columns (they'll be NULL in INSERT)
+- Remove temporary columns after import
+
+### Safe Mode Options
+
+```bash
+# Safe mode with schema reconciliation
+python3 db_copy.py --config config.json --data-only-safe
+
+# Safe mode but keep temporary columns
+python3 db_copy.py --config config.json --data-only-safe --keep-temp-cols
+
+# Safe mode for specific tables
+python3 db_copy.py --config config.json --data-only-safe --tables users products
+```
+
+### Data-Only Copy Scenarios
+
+```bash
+# Basic data-only (schemas match)
+python3 db_copy.py --config config.json --data-only
+
+# Safe mode (schemas may differ)
+python3 db_copy.py --config config.json --data-only-safe
+
+# Specific tables only
+python3 db_copy.py --config config.json --data-only --tables orders transactions
+
+# Safe mode with specific tables
+python3 db_copy.py --config config.json --data-only-safe --tables orders transactions
+
+# With SSH tunneling (data-only)
+python3 db_copy.py --config config.json --data-only --keep-dump
+```
+
+### 9. Verbose Logging
+
+```bash
+python3 db_copy.py --config config.json --verbose
+```
+
+### 10. Show Sample Config
+
+```bash
+python3 db_copy.py --sample-config
+```
+
 ## How It Works
+
+### Full Database Copy with Schema
 
 1. **SSH Tunnel Setup** (if needed)
    - Creates SSH tunnel to source server using `ssh -L`
@@ -210,6 +319,29 @@ python3 db_copy.py --sample-config
 5. **Cleanup**
    - Removes SQL dump file (unless `--keep-dump` is set)
    - Closes SSH tunnels
+
+### Data-Only Copy
+
+1. **Database Dump (Data Only)**
+   - Uses `mysqldump --no-create-info` (skip schema)
+   - Uses `mysqldump --complete-insert` (explicit column names)
+   - Uses `mysqldump --disable-keys` (faster restore)
+
+2. **Optional: Schema Reconciliation** (Safe Mode)
+   - Parses dump file to extract table/column information
+   - Queries `INFORMATION_SCHEMA` on target database
+   - Identifies missing columns in target tables
+   - Adds missing columns as `TEXT NULL` to target
+   - Tracks added columns for cleanup
+
+3. **Data Restore**
+   - Complete INSERT statements work with mismatched schemas
+   - Explicitly-named columns allow flexible column matching
+   - Extra columns in target receive NULL values
+
+4. **Post-Restore Cleanup** (Safe Mode)
+   - Removes temporary columns added during reconciliation
+   - Can be skipped with `--keep-temp-cols` flag
 
 ## Configuration File Reference
 
@@ -269,7 +401,72 @@ python3 db_copy.py --sample-config
 }
 ```
 
-## Common Scenarios
+## CLI Reference
+
+### Main Flags
+
+| Flag | Type | Description |
+|------|------|-------------|
+| `--config` | path | Path to JSON config file |
+| `--verbose` | flag | Enable verbose logging |
+| `--sample-config` | flag | Print sample configuration and exit |
+
+### Data Copy Flags
+
+| Flag | Type | Description |
+|------|------|-------------|
+| `--tables` | list | Specific tables to copy (space-separated) |
+| `--keep-dump` | flag | Keep SQL dump file after copy |
+
+### Data-Only Mode Flags
+
+| Flag | Type | Description |
+|------|------|-------------|
+| `--data-only` | flag | Copy data only (no schema). Requires target schema to exist. |
+| `--data-only-safe` | flag | Copy data only with automatic schema reconciliation. Handles column differences. |
+| `--keep-temp-cols` | flag | In safe mode, don't remove temporary columns after import |
+
+### Source Database Flags
+
+| Flag | Type | Description |
+|------|------|-------------|
+| `--source-host` | string | Source database host |
+| `--source-port` | int | Source database port (default: 3306) |
+| `--source-user` | string | Source database user |
+| `--source-password` | string | Source database password |
+| `--source-database` | string | Source database name |
+
+### Source SSH Flags
+
+| Flag | Type | Description |
+|------|------|-------------|
+| `--source-ssh-host` | string | Source SSH server host |
+| `--source-ssh-port` | int | Source SSH server port (default: 22) |
+| `--source-ssh-user` | string | Source SSH username (optional, uses SSH config if not specified) |
+| `--source-ssh-password` | string | Source SSH password |
+| `--source-ssh-key` | path | Source SSH private key path |
+
+### Target Database Flags
+
+| Flag | Type | Description |
+|------|------|-------------|
+| `--target-host` | string | Target database host |
+| `--target-port` | int | Target database port (default: 3306) |
+| `--target-user` | string | Target database user |
+| `--target-password` | string | Target database password |
+| `--target-database` | string | Target database name |
+
+### Target SSH Flags
+
+| Flag | Type | Description |
+|------|------|-------------|
+| `--target-ssh-host` | string | Target SSH server host |
+| `--target-ssh-port` | int | Target SSH server port (default: 22) |
+| `--target-ssh-user` | string | Target SSH username (optional, uses SSH config if not specified) |
+| `--target-ssh-password` | string | Target SSH password |
+| `--target-ssh-key` | path | Target SSH private key path |
+
+
 
 ### Scenario 1: Copy Local Database
 
@@ -328,6 +525,58 @@ python3 db_copy.py --config config.json --tables users clients projects
 python3 db_copy.py --config config.json --keep-dump
 # Output shows: Keeping dump file at: /tmp/db_dump_mydb_20260130_143022.sql
 ```
+
+### Scenario 6: Data-Only Copy (Matching Schemas)
+
+```bash
+python3 db_copy.py \
+  --source-host prod-db.aws.com \
+  --source-user admin \
+  --source-password prod_pass \
+  --source-database production \
+  --target-host dev-db.local \
+  --target-user admin \
+  --target-password dev_pass \
+  --target-database development \
+  --data-only
+```
+
+### Scenario 7: Safe Mode Copy (Schema Mismatch)
+
+Source and target have different schemas - uses safe mode to auto-reconcile:
+
+```bash
+python3 db_copy.py \
+  --source-host prod-db.aws.com \
+  --source-user admin \
+  --source-password prod_pass \
+  --source-database production \
+  --target-host dev-db.local \
+  --target-user admin \
+  --target-password dev_pass \
+  --target-database development \
+  --data-only-safe
+```
+
+Or with config:
+
+```bash
+python3 db_copy.py --config config.json --data-only-safe
+```
+
+### Scenario 8: Safe Mode with Specific Tables
+
+```bash
+python3 db_copy.py --config config.json --data-only-safe --tables users orders transactions
+```
+
+### Scenario 9: Safe Mode Keeping Temporary Columns
+
+```bash
+python3 db_copy.py --config config.json --data-only-safe --keep-temp-cols
+```
+
+Useful if you want to manually inspect or validate the added columns before removing them.
 
 ## Troubleshooting
 
@@ -422,22 +671,64 @@ SSH tunnel failed: Permission denied (publickey,password)
 - Check SSH server is accessible
 - Try manual connection: `ssh user@host`
 
+## Data-Only Copy Best Practices
+
+### When to Use Each Mode
+
+| Mode | Use Case | Schema Requirement |
+|------|----------|-------------------|
+| **Full Copy** | Fresh target environment | Target can be empty or new |
+| **Data-Only** | Target schema matches source | Identical or compatible schemas |
+| **Data-Only Safe** | Schema has differences | Any schema (auto-reconciles) |
+
+### Safe Mode Column Handling
+
+**Scenario 1: Source has extra column**
+```
+Source: id, name, email, phone
+Target: id, name, email
+Result: phone column added to target as TEXT NULL
+        Data imported successfully
+        Temporary column removed (optional)
+```
+
+**Scenario 2: Target has extra column**
+```
+Source: id, name, email
+Target: id, name, email, department, status
+Result: All source columns imported
+        department, status get NULL values
+        No temporary columns added
+```
+
+**Scenario 3: Column name mismatch (Different schema)**
+```
+Source: user_id, user_name
+Target: id, name
+Result: Fails (column names must match)
+        Solution: Rename columns in target before import
+                  or use basic --data-only mode if can handle mismatch
+```
+
 ## Performance Tips
 
 1. **Large Databases**: For multi-gigabyte databases, consider:
    - Running on a machine close to both servers
    - Using a persistent SSH connection
    - Keeping `--keep-dump` to preserve a backup
+   - Using `--data-only` for faster incremental updates
 
 2. **Network Optimization**:
    - SSH via LAN is faster than over internet
    - Consider gzip compression if network-bound
    - Run during off-peak hours
+   - Data-only mode is faster than full copy (no schema processing)
 
 3. **Database Optimization**:
    - Specific table copy is faster than full database
    - Indexes are included automatically
    - Foreign key constraints are preserved
+   - Safe mode adds overhead for schema analysis (minimal)
 
 ## Security Best Practices
 
@@ -448,6 +739,17 @@ SSH tunnel failed: Permission denied (publickey,password)
 5. **Restrict network access** to database servers
 6. **Use environment-specific credentials** (dev/prod/staging)
 7. **Review SQL dump files** if `--keep-dump` is used
+8. **Protect dump files** when using `--keep-dump` (may contain sensitive data)
+
+## Data-Only Copy Security
+
+When using data-only modes (`--data-only`, `--data-only-safe`):
+
+- Schema structure is NOT copied (safer for PII migrations)
+- Column names must match or be explicitly handled
+- Use `--keep-dump` carefully (dump contains raw data)
+- Safe mode temporarily adds columns - verify they're removed
+- Audit trail shows exact columns being copied
 
 ## Limitations
 
@@ -455,6 +757,8 @@ SSH tunnel failed: Permission denied (publickey,password)
 - SQL dump approach is I/O intensive
 - Network speed affects performance
 - Some MySQL-specific features require manual handling
+- Data-only mode requires compatible column names (safe mode helps with this)
+- Safe mode converts mismatched columns to TEXT NULL (may lose data type info)
 
 ## Examples
 
@@ -489,4 +793,35 @@ python3 db_copy.py --config db_config.json --tables users clients
 
 # Keep dump for inspection
 python3 db_copy.py --config db_config.json --keep-dump
+```
+
+### Data-Only Examples
+
+```bash
+# Full database data-only copy
+python3 db_copy.py --config db_config.json --data-only
+
+# Safe mode with auto schema reconciliation
+python3 db_copy.py --config db_config.json --data-only-safe
+
+# Specific tables in safe mode
+python3 db_copy.py --config db_config.json --data-only-safe --tables users orders
+
+# Safe mode but keep temporary columns
+python3 db_copy.py --config db_config.json --data-only-safe --keep-temp-cols
+
+# With SSH and safe mode
+python3 db_copy.py \
+  --source-host prod-db.internal \
+  --source-user dbuser \
+  --source-password dbpass \
+  --source-database mydb \
+  --source-ssh-host bastion.example.com \
+  --source-ssh-user ubuntu \
+  --source-ssh-key ~/.ssh/prod_key \
+  --target-host localhost \
+  --target-user root \
+  --target-password rootpass \
+  --target-database mydb \
+  --data-only-safe
 ```
