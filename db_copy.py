@@ -146,9 +146,24 @@ class MySQLDumpTool:
     
     @staticmethod
     def dump_database(host: str, port: int, user: str, password: str, 
-                      database: str, output_file: str, tables: Optional[List[str]] = None) -> bool:
-        """Dump database to SQL file"""
-        logger.info(f"Dumping database '{database}' from {host}:{port}")
+                      database: str, output_file: str, tables: Optional[List[str]] = None,
+                      data_only: bool = False) -> bool:
+        """Dump database to SQL file
+        
+        Args:
+            host: Database host
+            port: Database port
+            user: Database user
+            password: Database password
+            database: Database name
+            output_file: Output SQL file path
+            tables: Specific tables to dump (optional)
+            data_only: If True, dump only data (no schema). Includes column names for schema flexibility.
+        """
+        if data_only:
+            logger.info(f"Dumping data-only (no schema) from database '{database}' at {host}:{port}")
+        else:
+            logger.info(f"Dumping database '{database}' (including schema) from {host}:{port}")
         
         mysqldump_cmd = [
             'mysqldump',
@@ -158,12 +173,23 @@ class MySQLDumpTool:
             f'--password={password}' if password else '--no-password',
             '--single-transaction',
             '--lock-tables=false',
-            '--routines',
-            '--triggers',
-            '--events',
-            '--create-options',
             database
         ]
+        
+        if data_only:
+            mysqldump_cmd.extend([
+                '--no-create-info',
+                '--complete-insert',
+                '--disable-keys'
+            ])
+            logger.info("Data-only mode: Including column names in INSERT statements for schema flexibility")
+        else:
+            mysqldump_cmd.extend([
+                '--routines',
+                '--triggers',
+                '--events',
+                '--create-options'
+            ])
         
         # Add specific tables if provided
         if tables:
@@ -349,11 +375,13 @@ class DatabaseCopyTool:
     """Main database copy tool using SSH tunnels and mysqldump"""
     
     def __init__(self, source_config: Dict[str, Any], target_config: Dict[str, Any],
-                 use_source_ssh: bool = False, use_target_ssh: bool = False):
+                 use_source_ssh: bool = False, use_target_ssh: bool = False,
+                 data_only: bool = False):
         self.source_config = source_config
         self.target_config = target_config
         self.use_source_ssh = use_source_ssh
         self.use_target_ssh = use_target_ssh
+        self.data_only = data_only
         self.source_tunnel = None
         self.target_tunnel = None
         self.dump_file = None
@@ -390,7 +418,12 @@ class DatabaseCopyTool:
     
     def copy_database(self, tables: Optional[List[str]] = None, 
                      keep_dump: bool = False) -> bool:
-        """Copy database from source to target"""
+        """Copy database from source to target
+        
+        Args:
+            tables: Specific tables to copy (optional)
+            keep_dump: Keep the SQL dump file after copy
+        """
         
         try:
             # Check required tools
@@ -413,9 +446,14 @@ class DatabaseCopyTool:
             self.dump_file = self._generate_dump_filename()
             
             # Dump source database
-            logger.info("\n" + "="*50)
-            logger.info("DUMPING SOURCE DATABASE")
-            logger.info("="*50)
+            if self.data_only:
+                logger.info("\n" + "="*50)
+                logger.info("DUMPING SOURCE DATABASE (DATA ONLY)")
+                logger.info("="*50)
+            else:
+                logger.info("\n" + "="*50)
+                logger.info("DUMPING SOURCE DATABASE (WITH SCHEMA)")
+                logger.info("="*50)
             
             if not MySQLDumpTool.dump_database(
                 host=source_host,
@@ -424,14 +462,22 @@ class DatabaseCopyTool:
                 password=self.source_config.get('password', ''),
                 database=self.source_config['database'],
                 output_file=self.dump_file,
-                tables=tables
+                tables=tables,
+                data_only=self.data_only
             ):
                 return False
             
             # Restore to target database
-            logger.info("\n" + "="*50)
-            logger.info("RESTORING TO TARGET DATABASE")
-            logger.info("="*50)
+            if self.data_only:
+                logger.info("\n" + "="*50)
+                logger.info("RESTORING DATA TO TARGET DATABASE")
+                logger.info("="*50)
+                logger.info("NOTE: Target database schema must already exist")
+                logger.info("NOTE: Mismatched columns will be handled by mysqld")
+            else:
+                logger.info("\n" + "="*50)
+                logger.info("RESTORING TO TARGET DATABASE (WITH SCHEMA)")
+                logger.info("="*50)
             
             if not MySQLDumpTool.restore_database(
                 host=target_host,
@@ -529,8 +575,14 @@ Examples:
   # Copy using config file
   python3 db_copy.py --config config.json
 
+  # Copy data only (target schema must exist)
+  python3 db_copy.py --config config.json --data-only
+
   # Copy specific tables
   python3 db_copy.py --config config.json --tables users products orders
+
+  # Copy data from specific tables only
+  python3 db_copy.py --config config.json --data-only --tables users products
 
   # Keep the SQL dump file for manual inspection
   python3 db_copy.py --config config.json --keep-dump
@@ -540,6 +592,11 @@ Examples:
 
   # Direct connection (no SSH)
   python3 db_copy.py \\
+    --source-host source-db.com --source-user root --source-password pass --source-database mydb \\
+    --target-host target-db.com --target-user root --target-password pass --target-database mydb
+
+  # Data-only copy with direct connection
+  python3 db_copy.py --data-only \\
     --source-host source-db.com --source-user root --source-password pass --source-database mydb \\
     --target-host target-db.com --target-user root --target-password pass --target-database mydb
         """
@@ -570,6 +627,7 @@ Examples:
     
     parser.add_argument('--tables', nargs='+', help='Specific tables to copy (if not specified, all tables are copied)')
     parser.add_argument('--keep-dump', action='store_true', help='Keep the SQL dump file after copy')
+    parser.add_argument('--data-only', action='store_true', help='Copy data only (no schema). Target database must have schema already. Handles schema differences gracefully.')
     parser.add_argument('--sample-config', action='store_true', help='Print sample configuration')
     parser.add_argument('--verbose', action='store_true', help='Enable verbose logging')
     
@@ -650,7 +708,8 @@ Examples:
             source_config=source_config,
             target_config=target_config,
             use_source_ssh=bool(source_config.get('ssh')),
-            use_target_ssh=bool(target_config.get('ssh'))
+            use_target_ssh=bool(target_config.get('ssh')),
+            data_only=args.data_only
         )
         logger.info("Starting database copy operation...")
         logger.info("current configuration:")
