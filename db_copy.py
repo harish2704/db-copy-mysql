@@ -126,6 +126,201 @@ class MySQLDumpTool:
     """Handle MySQL dump and restore operations"""
     
     @staticmethod
+    def parse_dump_columns(dump_file: str) -> Dict[str, List[str]]:
+        """Parse SQL dump file to extract table names and their columns
+        
+        Returns a dict mapping table_name -> list of column names
+        Looks for INSERT INTO statements with complete column lists
+        """
+        table_columns = {}
+        
+        try:
+            with open(dump_file, 'r', encoding='utf-8', errors='ignore') as f:
+                for line in f:
+                    line = line.strip()
+                    
+                    # Look for INSERT INTO statements with explicit column names
+                    # Pattern: INSERT INTO `table_name` (col1, col2, ...) VALUES
+                    if line.startswith('INSERT INTO'):
+                        try:
+                            # Extract table name - between backticks or unquoted
+                            import re
+                            
+                            # Match: INSERT INTO `table` (cols) or INSERT INTO table (cols)
+                            match = re.match(
+                                r"INSERT\s+INTO\s+`?([^\s`(]+)`?\s*\(([^)]+)\)",
+                                line,
+                                re.IGNORECASE
+                            )
+                            
+                            if match:
+                                table_name = match.group(1)
+                                columns_str = match.group(2)
+                                
+                                # Parse column names - remove backticks and split by comma
+                                columns = [
+                                    col.strip().strip('`')
+                                    for col in columns_str.split(',')
+                                ]
+                                
+                                table_columns[table_name] = columns
+                        
+                        except Exception as e:
+                            logger.debug(f"Could not parse INSERT statement: {line[:100]} - {e}")
+            
+            if table_columns:
+                logger.info(f"Parsed {len(table_columns)} tables from dump file")
+                for table, cols in table_columns.items():
+                    logger.debug(f"  {table}: {len(cols)} columns")
+            else:
+                logger.warning("No tables found in dump file")
+        
+        except Exception as err:
+            logger.error(f"Error parsing dump file: {err}")
+        
+        return table_columns
+    
+    @staticmethod
+    def get_target_columns(host: str, port: int, user: str, password: str,
+                          database: str, table: str) -> List[str]:
+        """Get list of column names from target database table
+        
+        Returns list of column names in the table
+        """
+        mysql_cmd = [
+            'mysql',
+            '-h', host,
+            '-P', str(port),
+            '-u', user,
+            f'--password={password}' if password else '--no-password',
+            '-N',  # Skip column headers
+            '-s',  # Silent mode (tab-separated)
+            database
+        ]
+        
+        try:
+            process = subprocess.Popen(
+                mysql_cmd,
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE
+            )
+            
+            query = f"SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME='{table}' ORDER BY ORDINAL_POSITION;"
+            stdout, stderr = process.communicate(input=query.encode())
+            
+            if process.returncode != 0:
+                logger.warning(f"Could not fetch columns for table '{table}': {stderr.decode()}")
+                return []
+            
+            columns = [line.strip() for line in stdout.decode().split('\n') if line.strip()]
+            return columns
+        
+        except Exception as err:
+            logger.error(f"Error getting target columns: {err}")
+            return []
+    
+    @staticmethod
+    def add_missing_columns(host: str, port: int, user: str, password: str,
+                           database: str, table: str, columns_to_add: List[str]) -> bool:
+        """Add missing columns to target table as TEXT NULL
+        
+        Returns True if successful or no columns to add
+        """
+        if not columns_to_add:
+            return True
+        
+        mysql_cmd = [
+            'mysql',
+            '-h', host,
+            '-P', str(port),
+            '-u', user,
+            f'--password={password}' if password else '--no-password',
+            database
+        ]
+        
+        try:
+            alter_statements = []
+            for col in columns_to_add:
+                alter_statements.append(f"ADD COLUMN `{col}` TEXT NULL")
+            
+            alter_query = f"ALTER TABLE `{table}` {', '.join(alter_statements)};"
+            
+            logger.info(f"Adding {len(columns_to_add)} missing columns to table '{table}'")
+            logger.debug(f"Columns to add: {columns_to_add}")
+            
+            process = subprocess.Popen(
+                mysql_cmd,
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE
+            )
+            
+            stdout, stderr = process.communicate(input=alter_query.encode())
+            
+            if process.returncode != 0:
+                error_msg = stderr.decode('utf-8', errors='ignore')
+                logger.warning(f"Could not add columns to table '{table}': {error_msg}")
+                return False
+            
+            logger.info(f"Successfully added {len(columns_to_add)} columns to '{table}'")
+            return True
+        
+        except Exception as err:
+            logger.error(f"Error adding columns: {err}")
+            return False
+    
+    @staticmethod
+    def drop_columns(host: str, port: int, user: str, password: str,
+                    database: str, table: str, columns_to_drop: List[str]) -> bool:
+        """Remove columns from target table
+        
+        Returns True if successful or no columns to drop
+        """
+        if not columns_to_drop:
+            return True
+        
+        mysql_cmd = [
+            'mysql',
+            '-h', host,
+            '-P', str(port),
+            '-u', user,
+            f'--password={password}' if password else '--no-password',
+            database
+        ]
+        
+        try:
+            drop_statements = []
+            for col in columns_to_drop:
+                drop_statements.append(f"DROP COLUMN `{col}`")
+            
+            alter_query = f"ALTER TABLE `{table}` {', '.join(drop_statements)};"
+            
+            logger.info(f"Removing {len(columns_to_drop)} temporary columns from table '{table}'")
+            logger.debug(f"Columns to remove: {columns_to_drop}")
+            
+            process = subprocess.Popen(
+                mysql_cmd,
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE
+            )
+            
+            stdout, stderr = process.communicate(input=alter_query.encode())
+            
+            if process.returncode != 0:
+                error_msg = stderr.decode('utf-8', errors='ignore')
+                logger.warning(f"Could not drop columns from table '{table}': {error_msg}")
+                return False
+            
+            logger.info(f"Successfully removed {len(columns_to_drop)} columns from '{table}'")
+            return True
+        
+        except Exception as err:
+            logger.error(f"Error dropping columns: {err}")
+            return False
+    
+    @staticmethod
     def check_mysql_tools() -> bool:
         """Check if mysqldump and mysql commands are available"""
         tools = ['mysqldump', 'mysql']
@@ -376,15 +571,17 @@ class DatabaseCopyTool:
     
     def __init__(self, source_config: Dict[str, Any], target_config: Dict[str, Any],
                  use_source_ssh: bool = False, use_target_ssh: bool = False,
-                 data_only: bool = False):
+                 data_only: bool = False, data_only_safe: bool = False):
         self.source_config = source_config
         self.target_config = target_config
         self.use_source_ssh = use_source_ssh
         self.use_target_ssh = use_target_ssh
         self.data_only = data_only
+        self.data_only_safe = data_only_safe  # Safe mode with schema reconciliation
         self.source_tunnel = None
         self.target_tunnel = None
         self.dump_file = None
+        self.added_columns = {}  # Track columns added during safe mode: {table: [cols]}
     
     def _setup_tunnel(self, config: Dict[str, Any], use_ssh: bool) -> tuple:
         """Setup SSH tunnel if needed and return host/port"""
@@ -416,13 +613,85 @@ class DatabaseCopyTool:
         filename = f"/tmp/db_dump_{source_db}_{timestamp}.sql"
         return filename
     
+    def _reconcile_schema(self, target_host: str, target_port: int, target_user: str,
+                         target_password: str, target_database: str) -> bool:
+        """Analyze dump file and add missing columns to target database
+        
+        Compares dump file columns with target table columns and adds
+        any missing columns as TEXT NULL to allow INSERT statements to work.
+        
+        Returns True if reconciliation completed (even with warnings)
+        """
+        try:
+            # Parse dump file to get table/column info
+            dump_tables = MySQLDumpTool.parse_dump_columns(self.dump_file)
+            
+            if not dump_tables:
+                logger.warning("Could not parse tables from dump file")
+                return False
+            
+            logger.info(f"Found {len(dump_tables)} tables in dump file")
+            
+            # For each table in dump, check target columns
+            for table_name, dump_columns in dump_tables.items():
+                logger.info(f"\nAnalyzing table '{table_name}'...")
+                
+                # Get existing columns in target table
+                target_columns = MySQLDumpTool.get_target_columns(
+                    host=target_host,
+                    port=target_port,
+                    user=target_user,
+                    password=target_password,
+                    database=target_database,
+                    table=table_name
+                )
+                
+                if not target_columns:
+                    logger.warning(f"  Table '{table_name}' not found in target database or is empty")
+                    continue
+                
+                logger.info(f"  Dump has {len(dump_columns)} columns")
+                logger.info(f"  Target has {len(target_columns)} columns")
+                
+                # Find columns in dump but not in target
+                missing_in_target = [col for col in dump_columns if col not in target_columns]
+                
+                if missing_in_target:
+                    logger.warning(f"  Missing columns in target: {missing_in_target}")
+                    
+                    # Add missing columns to target
+                    if MySQLDumpTool.add_missing_columns(
+                        host=target_host,
+                        port=target_port,
+                        user=target_user,
+                        password=target_password,
+                        database=target_database,
+                        table=table_name,
+                        columns_to_add=missing_in_target
+                    ):
+                        self.added_columns[table_name] = missing_in_target
+                else:
+                    logger.info(f"  All dump columns exist in target table")
+                
+                # Warn about extra columns in target
+                extra_in_target = [col for col in target_columns if col not in dump_columns]
+                if extra_in_target:
+                    logger.info(f"  Extra columns in target (will get NULL): {extra_in_target}")
+            
+            return True
+        
+        except Exception as err:
+            logger.error(f"Error during schema reconciliation: {err}", exc_info=True)
+            return False
+    
     def copy_database(self, tables: Optional[List[str]] = None, 
-                     keep_dump: bool = False) -> bool:
+                     keep_dump: bool = False, cleanup_temp_cols: bool = True) -> bool:
         """Copy database from source to target
         
         Args:
             tables: Specific tables to copy (optional)
             keep_dump: Keep the SQL dump file after copy
+            cleanup_temp_cols: In safe mode, remove temporary columns added for schema mismatch
         """
         
         try:
@@ -446,7 +715,7 @@ class DatabaseCopyTool:
             self.dump_file = self._generate_dump_filename()
             
             # Dump source database
-            if self.data_only:
+            if self.data_only or self.data_only_safe:
                 logger.info("\n" + "="*50)
                 logger.info("DUMPING SOURCE DATABASE (DATA ONLY)")
                 logger.info("="*50)
@@ -463,12 +732,24 @@ class DatabaseCopyTool:
                 database=self.source_config['database'],
                 output_file=self.dump_file,
                 tables=tables,
-                data_only=self.data_only
+                data_only=(self.data_only or self.data_only_safe)
             ):
                 return False
             
+            # Safe mode: reconcile schema before restore
+            if self.data_only_safe:
+                logger.info("\n" + "="*50)
+                logger.info("SAFE MODE: ANALYZING SCHEMA DIFFERENCES")
+                logger.info("="*50)
+                
+                if not self._reconcile_schema(target_host, target_port,
+                                             self.target_config['user'],
+                                             self.target_config.get('password', ''),
+                                             self.target_config['database']):
+                    logger.warning("Schema reconciliation had issues, but continuing with restore...")
+            
             # Restore to target database
-            if self.data_only:
+            if self.data_only or self.data_only_safe:
                 logger.info("\n" + "="*50)
                 logger.info("RESTORING DATA TO TARGET DATABASE")
                 logger.info("="*50)
@@ -489,6 +770,23 @@ class DatabaseCopyTool:
                 create_db=True
             ):
                 return False
+            
+            # Safe mode: cleanup temporary columns if requested
+            if self.data_only_safe and cleanup_temp_cols and self.added_columns:
+                logger.info("\n" + "="*50)
+                logger.info("CLEANING UP TEMPORARY COLUMNS")
+                logger.info("="*50)
+                
+                for table, cols in self.added_columns.items():
+                    MySQLDumpTool.drop_columns(
+                        host=target_host,
+                        port=target_port,
+                        user=self.target_config['user'],
+                        password=self.target_config.get('password', ''),
+                        database=self.target_config['database'],
+                        table=table,
+                        columns_to_drop=cols
+                    )
             
             # Summary
             logger.info("\n" + "="*50)
@@ -578,11 +876,19 @@ Examples:
   # Copy data only (target schema must exist)
   python3 db_copy.py --config config.json --data-only
 
+  # Copy data only with SAFE MODE - automatic schema reconciliation
+  python3 db_copy.py --config config.json --data-only-safe
+  # This will: analyze column differences, add missing columns to target,
+  # import data, then remove temporary columns
+
+  # Safe mode but keep the temporary columns added for schema mismatch
+  python3 db_copy.py --config config.json --data-only-safe --keep-temp-cols
+
   # Copy specific tables
   python3 db_copy.py --config config.json --tables users products orders
 
-  # Copy data from specific tables only
-  python3 db_copy.py --config config.json --data-only --tables users products
+  # Copy data from specific tables with safe mode
+  python3 db_copy.py --config config.json --data-only-safe --tables users products
 
   # Keep the SQL dump file for manual inspection
   python3 db_copy.py --config config.json --keep-dump
@@ -597,6 +903,11 @@ Examples:
 
   # Data-only copy with direct connection
   python3 db_copy.py --data-only \\
+    --source-host source-db.com --source-user root --source-password pass --source-database mydb \\
+    --target-host target-db.com --target-user root --target-password pass --target-database mydb
+
+  # Safe mode with direct connection (handles schema differences)
+  python3 db_copy.py --data-only-safe \\
     --source-host source-db.com --source-user root --source-password pass --source-database mydb \\
     --target-host target-db.com --target-user root --target-password pass --target-database mydb
         """
@@ -628,6 +939,8 @@ Examples:
     parser.add_argument('--tables', nargs='+', help='Specific tables to copy (if not specified, all tables are copied)')
     parser.add_argument('--keep-dump', action='store_true', help='Keep the SQL dump file after copy')
     parser.add_argument('--data-only', action='store_true', help='Copy data only (no schema). Target database must have schema already. Handles schema differences gracefully.')
+    parser.add_argument('--data-only-safe', action='store_true', help='Copy data only with automatic schema reconciliation. Adds missing columns to target, imports data, then removes temporary columns.')
+    parser.add_argument('--keep-temp-cols', action='store_true', help='In safe mode, keep the temporary columns added for schema mismatch (do not delete them after import)')
     parser.add_argument('--sample-config', action='store_true', help='Print sample configuration')
     parser.add_argument('--verbose', action='store_true', help='Enable verbose logging')
     
@@ -709,14 +1022,19 @@ Examples:
             target_config=target_config,
             use_source_ssh=bool(source_config.get('ssh')),
             use_target_ssh=bool(target_config.get('ssh')),
-            data_only=args.data_only
+            data_only=args.data_only,
+            data_only_safe=args.data_only_safe
         )
         logger.info("Starting database copy operation...")
         logger.info("current configuration:")
         logger.info(f"Source Config: {source_config}")
         logger.info(f"Target Config: {target_config}")
         
-        success = tool.copy_database(tables=args.tables, keep_dump=args.keep_dump)
+        success = tool.copy_database(
+            tables=args.tables,
+            keep_dump=args.keep_dump,
+            cleanup_temp_cols=not args.keep_temp_cols
+        )
         
         return 0 if success else 1
     
