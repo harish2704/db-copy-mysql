@@ -206,7 +206,7 @@ class MySQLDumpTool:
                 stderr=subprocess.PIPE
             )
             
-            query = f"SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME='{table}' ORDER BY ORDINAL_POSITION;"
+            query = f"SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME='{table}' AND TABLE_SCHEMA='{database}' ORDER BY ORDINAL_POSITION;"
             stdout, stderr = process.communicate(input=query.encode())
             
             if process.returncode != 0:
@@ -650,8 +650,8 @@ class DatabaseCopyTool:
                     logger.warning(f"  Table '{table_name}' not found in target database or is empty")
                     continue
                 
-                logger.info(f"  Dump has {len(dump_columns)} columns")
-                logger.info(f"  Target has {len(target_columns)} columns")
+                logger.info(f"  Dump has {len(dump_columns)} columns %s", dump_columns )
+                logger.info(f"  Target has {len(target_columns)} columns %s", target_columns )
                 
                 # Find columns in dump but not in target
                 missing_in_target = [col for col in dump_columns if col not in target_columns]
