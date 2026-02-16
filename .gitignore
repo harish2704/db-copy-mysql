@@ -1,0 +1,12 @@
+.bash_history
+*.json
+*.whl
+*.egg-info
+__pycache__/
+dist/
+build/
+*.egg
+*.log
+*.pyc
+*.pyo
+*.pyd

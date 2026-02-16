@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """
 MySQL Database Copy Tool
 Copy data between MySQL databases using SSH tunneling and mysqldump
