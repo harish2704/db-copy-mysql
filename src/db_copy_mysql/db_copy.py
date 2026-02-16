@@ -189,6 +189,7 @@ class MySQLDumpTool:
         """
         mysql_cmd = [
             'mysql',
+            '-C',
             '-h', host,
             '-P', str(port),
             '-u', user,
@@ -232,6 +233,7 @@ class MySQLDumpTool:
         
         mysql_cmd = [
             'mysql',
+            '-C',
             '-h', host,
             '-P', str(port),
             '-u', user,
@@ -282,6 +284,7 @@ class MySQLDumpTool:
         
         mysql_cmd = [
             'mysql',
+            '-C',
             '-h', host,
             '-P', str(port),
             '-u', user,
@@ -362,6 +365,7 @@ class MySQLDumpTool:
         
         mysqldump_cmd = [
             'mysqldump',
+            '-C',
             '-h', host,
             '-P', str(port),
             '-u', user,
@@ -380,6 +384,7 @@ class MySQLDumpTool:
             logger.info("Data-only mode: Including column names in INSERT statements for schema flexibility")
         else:
             mysqldump_cmd.extend([
+                '--force',
                 '--routines',
                 '--triggers',
                 '--events',
@@ -436,6 +441,7 @@ class MySQLDumpTool:
             logger.info(f"Creating database '{database}' if not exists")
             create_cmd = [
                 'mysql',
+                '-C',
                 '-h', host,
                 '-P', str(port),
                 '-u', user,
@@ -462,6 +468,7 @@ class MySQLDumpTool:
         # Restore from file with --force to ignore non-critical errors
         mysql_cmd = [
             'mysql',
+            '-C',
             '--force',  # Continue on errors like SUPER privilege required
             '-h', host,
             '-P', str(port),
