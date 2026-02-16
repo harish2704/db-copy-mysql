@@ -10,6 +10,3 @@ mypy>=0.991
 pytest>=7.0.0
 pytest-cov>=4.0.0
 
-# Documentation (optional)
-sphinx>=5.0.0
-sphinx-rtd-theme>=1.0.0
