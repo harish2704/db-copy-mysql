@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 """
 MySQL Database Copy Tool
 Copy data between MySQL databases using SSH tunneling and mysqldump
@@ -28,11 +29,11 @@ class SSHTunnelManager:
     """Manage SSH tunnel lifecycle"""
     
     def __init__(self, ssh_host: str, db_host: str, db_port: int, 
-                 ssh_port: int = 22, ssh_user: Optional[str] = None, 
+                 ssh_port: int, ssh_user: Optional[str] = None, 
                  ssh_password: Optional[str] = None,
                  ssh_key: Optional[str] = None):
         self.ssh_host = ssh_host
-        self.ssh_port = ssh_port or 22  # Default to standard SSH port
+        self.ssh_port = ssh_port
         self.ssh_user = ssh_user  # Can be empty to use SSH config
         self.db_host = db_host
         self.db_port = db_port
@@ -65,8 +66,8 @@ class SSHTunnelManager:
             '-L', f'{self.local_port}:{self.db_host}:{self.db_port}',
         ]
         
-        # Add port (include even if 22 for clarity)
-        ssh_cmd.extend(['-p', str(self.ssh_port)])
+        if self.ssh_port:
+            ssh_cmd.extend(['-p', str(self.ssh_port)])
         
         # Add private key if specified
         if self.ssh_key:
@@ -80,6 +81,7 @@ class SSHTunnelManager:
         
         ssh_cmd.append(remote_spec)
         
+        logger.info('Running command %s' % ( ' '.join(ssh_cmd) ) )
         try:
             # Start tunnel process
             self.process = subprocess.Popen(
@@ -597,7 +599,7 @@ class DatabaseCopyTool:
                 ssh_host=ssh_config['host'],
                 db_host=config['host'],
                 db_port=config.get('port', 3306),
-                ssh_port=ssh_config.get('port', 22),
+                ssh_port=ssh_config.get('port'),
                 ssh_user=ssh_config.get('username'),  # Optional - uses SSH config if not set
                 ssh_password=ssh_config.get('password'),
                 ssh_key=ssh_config.get('private_key_path')
