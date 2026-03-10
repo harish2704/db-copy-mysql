@@ -372,6 +372,7 @@ class MySQLDumpTool:
             '-u', user,
             f'--password={password}' if password else '--no-password',
             '--single-transaction',
+            '--replace',
             '--lock-tables=false',
             database
         ]
