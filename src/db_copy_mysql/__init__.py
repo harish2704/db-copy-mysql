@@ -6,6 +6,7 @@ This package provides a CLI tool to copy MySQL databases using SSH tunneling and
 
 Main features:
 - SSH tunneling with key-based or password authentication
+- Remote binary execution (run mysqldump/mysql on the SSH server)
 - Copy entire databases or specific tables
 - Data-only copy mode with schema reconciliation
 - Automatic database creation on target
@@ -15,6 +16,7 @@ Main features:
 Usage:
     db-copy-mysql --config config.json
     db-copy-mysql --source-host source-db.com --target-host target-db.com
+    db-copy-mysql --config config.json --use-binaries-on-source --use-binaries-on-target
 """
 
 __version__ = "1.0.0"
@@ -26,6 +28,6 @@ from .db_copy import DatabaseCopyTool, SSHTunnelManager, MySQLDumpTool
 
 __all__ = [
     "DatabaseCopyTool",
-    "SSHTunnelManager", 
+    "SSHTunnelManager",
     "MySQLDumpTool",
 ]

@@ -8,7 +8,9 @@ A lightweight Python CLI tool to copy MySQL databases using SSH tunneling and sy
 - ✅ **Faster** - Direct use of mysqldump (optimized tool)
 - ✅ **More portable** - Relies on common system tools
 - ✅ **Better for large databases** - mysqldump is more efficient
-- ✅ **SSH tunneling** - Native OpenSSH support
+- ✅ **SSH tunneling** - Native OpenSSH support (port forwarding or remote binary execution)
+- ✅ **Remote binary execution** - Run `mysqldump`/`mysql` directly on the SSH server for better performance
+- ✅ Auto-fallback to tunnel mode if remote tools are unavailable
 - ✅ Copy entire databases or specific tables
 - ✅ SSH tunneling with key-based or password authentication
 - ✅ Different servers, ports, and database names
@@ -27,8 +29,10 @@ A lightweight Python CLI tool to copy MySQL databases using SSH tunneling and sy
 
 - Python 3.6+
 - `ssh` command (OpenSSH client)
-- `mysqldump` command (MySQL client)
-- `mysql` command (MySQL client)
+- `mysqldump` and `mysql` on **either** the local machine **or** the remote SSH server(s)
+  - If using `--use-binaries-on-source`, `mysqldump` is needed on the source SSH server
+  - If using `--use-binaries-on-target`, `mysql` is needed on the target SSH server
+  - The tool auto-falls back to local execution if remote tools are unavailable
 
 ### Installation
 
@@ -294,18 +298,16 @@ python3 db_copy.py --sample-config
 
 ### Full Database Copy with Schema
 
+**Default mode (SSH tunnel + local tools):**
+
 1. **SSH Tunnel Setup** (if needed)
    - Creates SSH tunnel to source server using `ssh -L`
    - Creates SSH tunnel to target server using `ssh -L`
    - Auto-assigns available local ports
 
 2. **Database Dump**
-   - Uses `mysqldump` with optimized flags:
-     - `--single-transaction`: Single consistent snapshot
-     - `--lock-tables=false`: No lock wait
-     - `--routines`: Include stored procedures
-     - `--triggers`: Include triggers
-     - `--events`: Include scheduled events
+   - Uses local `mysqldump` through the SSH tunnel
+   - Optimized flags: `--single-transaction`, `--lock-tables=false`, `--routines`, `--triggers`, `--events`
 
 3. **SQL File Generation**
    - Creates unique timestamped file: `/tmp/db_dump_<db>_<timestamp>.sql`
@@ -313,12 +315,18 @@ python3 db_copy.py --sample-config
 
 4. **Database Restore**
    - Creates target database if it doesn't exist
-   - Pipes SQL file to `mysql` command
-   - Clean restoration with no temporary files needed
+   - Pipes SQL file to local `mysql` through the SSH tunnel
 
 5. **Cleanup**
    - Removes SQL dump file (unless `--keep-dump` is set)
    - Closes SSH tunnels
+
+**Remote binary mode (`--use-binaries-on-source` / `--use-binaries-on-target`):**
+
+1. **SSH Connection** — No tunnel, just `ssh` command execution
+2. **Source side** — Runs `mysqldump` directly on the SSH server via `ssh <opts> mysqldump -h <db> ... > dump.sql`
+3. **Target side** — Runs `mysql` directly on the SSH server via `ssh <opts> mysql -h <db> ... < dump.sql`
+4. **Fallback** — If the remote tool is missing, automatically falls back to tunnel mode
 
 ### Data-Only Copy
 
@@ -425,6 +433,13 @@ python3 db_copy.py --sample-config
 | `--data-only` | flag | Copy data only (no schema). Requires target schema to exist. |
 | `--data-only-safe` | flag | Copy data only with automatic schema reconciliation. Handles column differences. |
 | `--keep-temp-cols` | flag | In safe mode, don't remove temporary columns after import |
+
+### Remote Binary Flags
+
+| Flag | Type | Description |
+|------|------|-------------|
+| `--use-binaries-on-source` | flag | Run `mysqldump` on the source SSH server instead of locally via tunnel (requires source SSH config) |
+| `--use-binaries-on-target` | flag | Run `mysql` on the target SSH server instead of locally via tunnel (requires target SSH config) |
 
 ### Source Database Flags
 
@@ -578,6 +593,30 @@ python3 db_copy.py --config config.json --data-only-safe --keep-temp-cols
 
 Useful if you want to manually inspect or validate the added columns before removing them.
 
+### Scenario 10: Remote Binary Execution (Faster SSH Copies)
+
+By default, the tool creates SSH port-forwarding tunnels and runs `mysqldump`/`mysql` locally. For large databases or slow connections, you can run the MySQL tools **directly on the SSH server** — the data still comes through SSH but avoids the overhead of double-encapsulation through the tunnel:
+
+```bash
+# Run mysqldump on the source SSH server
+python3 db_copy.py --config config.json --use-binaries-on-source
+
+# Run mysql on the target SSH server
+python3 db_copy.py --config config.json --use-binaries-on-target
+
+# Run both remotely
+python3 db_copy.py --config config.json --use-binaries-on-source --use-binaries-on-target
+```
+
+**How it works:**
+- Instead of `ssh -L<port>:db:3306` + local `mysqldump`, it runs `ssh <opts> mysqldump -h db ... > dump.sql`
+- Instead of `ssh -L<port>:db:3306` + local `mysql`, it runs `ssh <opts> mysql -h db ... < dump.sql`
+- The SSH connection is still used, but for command execution instead of port forwarding
+
+**Fallback behavior:**
+- If the remote tool (`mysqldump`/`mysql`) is not found on the server, the tool warns and falls back to the tunnel + local execution method
+- Requires SSH config (`--source-ssh-host` / `--target-ssh-host`) to be configured
+
 ## Troubleshooting
 
 ### Error: "mysql command not found"
@@ -717,10 +756,12 @@ Result: Fails (column names must match)
    - Using a persistent SSH connection
    - Keeping `--keep-dump` to preserve a backup
    - Using `--data-only` for faster incremental updates
+   - Using `--use-binaries-on-source`/`--use-binaries-on-target` to eliminate tunnel overhead
 
 2. **Network Optimization**:
    - SSH via LAN is faster than over internet
    - Consider gzip compression if network-bound
+   - **Remote binary mode is significantly faster** for large datasets — `mysqldump`/`mysql` runs on the SSH server, avoiding double-encapsulation through the tunnel
    - Run during off-peak hours
    - Data-only mode is faster than full copy (no schema processing)
 
@@ -759,6 +800,8 @@ When using data-only modes (`--data-only`, `--data-only-safe`):
 - Some MySQL-specific features require manual handling
 - Data-only mode requires compatible column names (safe mode helps with this)
 - Safe mode converts mismatched columns to TEXT NULL (may lose data type info)
+- **Remote binary mode** (`--use-binaries-on-source`/`--use-binaries-on-target`) requires `mysqldump`/`mysql` installed on the remote SSH server. The tool auto-falls back to tunnel mode if they're missing.
+- **Remote binary mode** exposes the DB password in the SSH command line (same as local mode)
 
 ## Examples
 

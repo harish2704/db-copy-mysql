@@ -6,5 +6,5 @@ This allows the package to be run as: python -m db_copy_mysql
 
 from .db_copy import main
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()
